@@ -48,7 +48,7 @@ def test_logical_plan_parameters(ctx) -> None:
     plan = ctx.sql("SELECT c1, c2, c3 FROM t WHERE c1 = $1 AND c2 < $2").logical_plan()
 
     schema = plan.schema()
-    assert schema.names == ['c1', 'c2', 'c3']
+    assert schema.names == ["c1", "c2", "c3"]
     assert schema.field(0).type == pyarrow.string()
     assert schema.field(1).type == pyarrow.int64()
     assert schema.field(2).type == pyarrow.int64()
@@ -57,3 +57,29 @@ def test_logical_plan_parameters(ctx) -> None:
     assert len(parameters) == 2
     assert parameters["$1"] == pyarrow.string()
     assert parameters["$2"] == pyarrow.int64()
+
+
+def test_logical_plan_bind_positional_parameters(ctx) -> None:
+    ctx.register_csv("t", path="testing/data/csv/aggregate_test_100.csv")
+    plan = ctx.sql(
+        "SELECT c1, c2, c4 FROM t WHERE c1 != $1 AND c2 > $2 and c4 < $3"
+    ).logical_plan()
+
+    new_plan = plan.with_parameter_values(param_values=["c", 3, -30000])
+    result = ctx.execute_logical_plan(new_plan)
+
+    result.show()
+    assert result.count() == 2
+
+
+def test_logical_plan_bind_named_parameters(ctx) -> None:
+    ctx.register_csv("t", path="testing/data/csv/aggregate_test_100.csv")
+    plan = ctx.sql(
+        "SELECT c1, c2, c4 FROM t WHERE c1 != $str AND c2 > $int1 and c4 < $int2"
+    ).logical_plan()
+
+    new_plan = plan.with_parameter_values(param_values=["c", 3, -30000])
+    result = ctx.execute_logical_plan(new_plan)
+
+    result.show()
+    assert result.count() == 2

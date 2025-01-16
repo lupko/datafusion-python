@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import datafusion._internal as df_internal
 
-from typing import List, Any, TYPE_CHECKING, Dict, Optional
+from typing import List, Any, TYPE_CHECKING, Dict, Optional, Sequence, Union
 
 import pyarrow
 
@@ -71,6 +71,17 @@ class LogicalPlan:
     def schema(self) -> pyarrow.Schema:
         """Arrow Schema of the logical plan."""
         return self._raw_plan.schema()
+
+    def with_parameter_values(
+        self, param_values: Union[Sequence[Any], Dict[str, Any]]
+    ) -> LogicalPlan:
+        """Bind parameter values to placeholders.
+
+        Returns a new plan that has all placeholders replaced with actual values.
+        If the logical plan was for a 'Prepare' statement, the statement is
+        converted to their inner form, ready for execution.
+        """
+        return LogicalPlan(self._raw_plan.with_parameter_values(param_values))
 
     def __repr__(self) -> str:
         """Generate a printable representation of the plan."""

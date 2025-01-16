@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use crate::expr::aggregate::PyAggregate;
 use crate::expr::analyze::PyAnalyze;
 use crate::expr::distinct::PyDistinct;
@@ -36,12 +33,17 @@ use crate::expr::table_scan::PyTableScan;
 use crate::expr::unnest::PyUnnest;
 use crate::expr::window::PyWindowExpr;
 use crate::{context::PySessionContext, errors::py_unsupported_variant_err};
+use arrow::datatypes::DataType;
 use arrow::pyarrow::ToPyArrow;
+use datafusion::common::{ParamValues, ScalarValue};
 use datafusion::{error::DataFusionError, logical_expr::LogicalPlan};
 use datafusion_proto::logical_plan::{AsLogicalPlan, DefaultLogicalExtensionCodec};
 use prost::Message;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::types::{IntoPyDict, PyDict};
 use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyBytes};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[pyclass(name = "LogicalPlan", module = "datafusion", subclass)]
 #[derive(Debug, Clone)]
@@ -59,6 +61,121 @@ impl PyLogicalPlan {
 
     pub fn plan(&self) -> Arc<LogicalPlan> {
         self.plan.clone()
+    }
+}
+
+macro_rules! extract_nullable_scalar {
+    ($var:ident, $t:ty) => {
+        if $var.is_none() {
+            None
+        } else {
+            Some($var.extract::<$t>()?)
+        }
+    };
+}
+
+fn py_obj_to_scalar(
+    py: Python<'_>,
+    obj: &PyObject,
+    data_type: &Option<DataType>,
+) -> PyResult<ScalarValue> {
+    if data_type.is_none() {
+        // TODO: find out when can parameter data type end up None and
+        //  whether it then makes sense to set parameter value to NULL..
+        return Ok(ScalarValue::Null);
+    }
+
+    let bound = obj.bind(py);
+    let value = match data_type.as_ref().unwrap() {
+        DataType::Boolean => ScalarValue::Boolean(extract_nullable_scalar!(bound, bool)),
+        DataType::Int16 => ScalarValue::Int16(extract_nullable_scalar!(bound, i16)),
+        DataType::UInt16 => ScalarValue::UInt16(extract_nullable_scalar!(bound, u16)),
+        DataType::Int32 => ScalarValue::Int32(extract_nullable_scalar!(bound, i32)),
+        DataType::UInt32 => ScalarValue::UInt32(extract_nullable_scalar!(bound, u32)),
+        DataType::Int64 => ScalarValue::Int64(extract_nullable_scalar!(bound, i64)),
+        DataType::UInt64 => ScalarValue::UInt64(extract_nullable_scalar!(bound, u64)),
+        DataType::Float32 => ScalarValue::Float32(extract_nullable_scalar!(bound, f32)),
+        DataType::Float64 => ScalarValue::Float64(extract_nullable_scalar!(bound, f64)),
+        DataType::Utf8 => ScalarValue::Utf8(extract_nullable_scalar!(bound, String)),
+        DataType::LargeUtf8 => ScalarValue::Utf8(extract_nullable_scalar!(bound, String)),
+        DataType::Binary => ScalarValue::Binary(extract_nullable_scalar!(bound, Vec<u8>)),
+        DataType::LargeBinary => ScalarValue::LargeBinary(extract_nullable_scalar!(bound, Vec<u8>)),
+        unsupported => {
+            return Err(PyValueError::new_err(format!(
+                "Unsupported parameter data type {}",
+                unsupported
+            )))
+        }
+    };
+
+    Ok(value)
+}
+
+fn py_dict_to_param_values(
+    py: Python<'_>,
+    values: HashMap<String, PyObject>,
+    parameter_types: &HashMap<String, Option<DataType>>,
+) -> PyResult<ParamValues> {
+    let mut result: HashMap<String, ScalarValue> = HashMap::default();
+
+    for (param_id, obj) in values.iter() {
+        let param_type = parameter_types.get(param_id).ok_or_else(|| {
+            PyValueError::new_err(format!("Plan does not have named parameter {}", param_id))
+        })?;
+
+        let value = py_obj_to_scalar(py, obj, param_type).map_err(|e| {
+            PyTypeError::new_err(format!(
+                "Failed to convert value for parameter {}: {}",
+                param_id,
+                e.value_bound(py).str().unwrap()
+            ))
+        })?;
+
+        result.insert(param_id.clone(), value);
+    }
+
+    Ok(result.into())
+}
+
+fn py_seq_to_param_values(
+    py: Python<'_>,
+    values: Vec<PyObject>,
+    parameter_types: &HashMap<String, Option<DataType>>,
+) -> PyResult<ParamValues> {
+    let mut result: Vec<ScalarValue> = Vec::with_capacity(values.len());
+
+    for (idx, obj) in values.iter().enumerate() {
+        let param_id = format!("${}", idx + 1);
+        let param_type = parameter_types.get(&param_id).ok_or_else(|| {
+            PyValueError::new_err(format!("Plan does not have parameter {}", &param_id))
+        })?;
+
+        let value = py_obj_to_scalar(py, obj, param_type).map_err(|e| {
+            PyTypeError::new_err(format!(
+                "Failed to convert value for parameter {}: {}",
+                param_id,
+                e.value_bound(py).str().unwrap()
+            ))
+        })?;
+
+        result.push(value);
+    }
+
+    Ok(result.into())
+}
+
+fn py_obj_to_param_values(
+    values: Bound<'_, PyAny>,
+    parameter_types: &HashMap<String, Option<DataType>>,
+) -> PyResult<ParamValues> {
+    if let Ok(seq) = values.extract::<Vec<PyObject>>() {
+        py_seq_to_param_values(values.py(), seq, parameter_types)
+    } else if let Ok(dict) = values.extract::<HashMap<String, PyObject>>() {
+        py_dict_to_param_values(values.py(), dict, parameter_types)
+    } else {
+        Err(PyValueError::new_err(
+            "Parameter values must be either a sequence (for positional parameters) or dictionary (for named parameters).",
+        ))
     }
 }
 
@@ -123,6 +240,18 @@ impl PyLogicalPlan {
             .collect();
 
         Ok(parameter_types.into_py_dict_bound(py))
+    }
+
+    fn with_parameter_values(&self, param_values: Bound<'_, PyAny>) -> PyResult<Self> {
+        let parameter_types = self.plan.get_parameter_types()?;
+        let df_param_values = py_obj_to_param_values(param_values, &parameter_types)?;
+        let plan = self
+            .plan
+            .as_ref()
+            .clone()
+            .with_param_values(df_param_values)?;
+
+        Ok(Self::new(plan))
     }
 
     fn schema(&self, py: Python<'_>) -> PyResult<PyObject> {
