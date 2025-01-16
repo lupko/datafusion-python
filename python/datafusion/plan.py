@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import datafusion._internal as df_internal
 
-from typing import List, Any, TYPE_CHECKING
+from typing import List, Any, TYPE_CHECKING, Dict, Optional
+
+import pyarrow
 
 if TYPE_CHECKING:
     from datafusion.context import SessionContext
@@ -57,6 +59,18 @@ class LogicalPlan:
     def inputs(self) -> List[LogicalPlan]:
         """Returns the list of inputs to the logical plan."""
         return [LogicalPlan(p) for p in self._raw_plan.inputs()]
+
+    def parameters(self) -> Dict[str, Optional[pyarrow.DataType]]:
+        """Identifies all placeholder tokens.
+
+        Returns mapping between placeholder identifier and Arrow DataType
+        to be used for the value.
+        """
+        return self._raw_plan.parameters()
+
+    def schema(self) -> pyarrow.Schema:
+        """Arrow Schema of the logical plan."""
+        return self._raw_plan.schema()
 
     def __repr__(self) -> str:
         """Generate a printable representation of the plan."""

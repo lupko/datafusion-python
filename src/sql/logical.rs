@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::expr::aggregate::PyAggregate;
@@ -26,6 +27,7 @@ use crate::expr::extension::PyExtension;
 use crate::expr::filter::PyFilter;
 use crate::expr::join::PyJoin;
 use crate::expr::limit::PyLimit;
+use crate::expr::logical_node::LogicalNode;
 use crate::expr::projection::PyProjection;
 use crate::expr::sort::PySort;
 use crate::expr::subquery::PySubquery;
@@ -34,12 +36,12 @@ use crate::expr::table_scan::PyTableScan;
 use crate::expr::unnest::PyUnnest;
 use crate::expr::window::PyWindowExpr;
 use crate::{context::PySessionContext, errors::py_unsupported_variant_err};
+use arrow::pyarrow::ToPyArrow;
 use datafusion::{error::DataFusionError, logical_expr::LogicalPlan};
 use datafusion_proto::logical_plan::{AsLogicalPlan, DefaultLogicalExtensionCodec};
 use prost::Message;
+use pyo3::types::{IntoPyDict, PyDict};
 use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyBytes};
-
-use crate::expr::logical_node::LogicalNode;
 
 #[pyclass(name = "LogicalPlan", module = "datafusion", subclass)]
 #[derive(Debug, Clone)]
@@ -103,6 +105,28 @@ impl PyLogicalPlan {
             inputs.push(input.to_owned().into());
         }
         inputs
+    }
+
+    fn parameters<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let parameter_types: HashMap<String, Option<PyObject>> = self
+            .plan
+            .get_parameter_types()?
+            .iter()
+            .map(|(id, data_type)| {
+                (
+                    id.clone(),
+                    data_type
+                        .as_ref()
+                        .map_or_else(|| None, |t| Some(t.to_pyarrow(py).unwrap())),
+                )
+            })
+            .collect();
+
+        Ok(parameter_types.into_py_dict_bound(py))
+    }
+
+    fn schema(&self, py: Python<'_>) -> PyResult<PyObject> {
+        self.plan.schema().inner().to_pyarrow(py)
     }
 
     fn __repr__(&self) -> PyResult<String> {

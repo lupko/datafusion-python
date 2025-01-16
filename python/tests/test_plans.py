@@ -15,14 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from datafusion import SessionContext, LogicalPlan, ExecutionPlan
+from datafusion import SessionContext, LogicalPlan, ExecutionPlan, DataFrame
 import pytest
 
 
 # Note: We must use CSV because memory tables are currently not supported for
 # conversion to/from protobuf.
 @pytest.fixture
-def df():
+def df() -> DataFrame:
     ctx = SessionContext()
     return ctx.read_csv(path="testing/data/csv/aggregate_test_100.csv").select("c1")
 
@@ -40,3 +40,7 @@ def test_logical_plan_to_proto(ctx, df) -> None:
     execution_plan = ExecutionPlan.from_proto(ctx, execution_plan_bytes)
 
     assert str(original_execution_plan) == str(execution_plan)
+
+
+def test_logical_plan_parameters(ctx, df) -> None:
+    print(df.logical_plan().schema())
