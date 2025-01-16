@@ -630,3 +630,12 @@ def test_sql_with_options_no_statements(ctx):
     options = SQLOptions().with_allow_statements(False)
     with pytest.raises(Exception, match="SetVariable"):
         ctx.sql_with_options(sql, options=options)
+
+
+def test_execute_logical_plan(ctx, database):
+    logical_plan = ctx.sql("SELECT * FROM csv").logical_plan()
+    df = ctx.sql("SELECT * FROM csv")
+    df_via_execute = ctx.execute_logical_plan(logical_plan)
+
+    df_via_execute.show()
+    assert df_via_execute.count() == df.count()

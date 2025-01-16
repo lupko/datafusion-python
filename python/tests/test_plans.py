@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import pyarrow
 
 from datafusion import SessionContext, LogicalPlan, ExecutionPlan, DataFrame
 import pytest
@@ -42,5 +43,17 @@ def test_logical_plan_to_proto(ctx, df) -> None:
     assert str(original_execution_plan) == str(execution_plan)
 
 
-def test_logical_plan_parameters(ctx, df) -> None:
-    print(df.logical_plan().schema())
+def test_logical_plan_parameters(ctx) -> None:
+    ctx.register_csv("t", path="testing/data/csv/aggregate_test_100.csv")
+    plan = ctx.sql("SELECT c1, c2, c3 FROM t WHERE c1 = $1 AND c2 < $2").logical_plan()
+
+    schema = plan.schema()
+    assert schema.names == ['c1', 'c2', 'c3']
+    assert schema.field(0).type == pyarrow.string()
+    assert schema.field(1).type == pyarrow.int64()
+    assert schema.field(2).type == pyarrow.int64()
+
+    parameters = plan.parameters()
+    assert len(parameters) == 2
+    assert parameters["$1"] == pyarrow.string()
+    assert parameters["$2"] == pyarrow.int64()

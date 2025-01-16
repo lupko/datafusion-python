@@ -1021,6 +1021,18 @@ impl PySessionContext {
         let stream = wait_for_future(py, fut).map_err(py_datafusion_err)?;
         Ok(PyRecordBatchStream::new(stream?))
     }
+
+    /// Execute a logical plan and return data frame.
+    pub fn execute_logical_plan(
+        &self,
+        logical_plan: PyLogicalPlan,
+        py: Python,
+    ) -> PyResult<PyDataFrame> {
+        let plan = logical_plan.plan.as_ref().clone();
+        let execute_future = self.ctx.execute_logical_plan(plan);
+        let df = wait_for_future(py, execute_future).map_err(DataFusionError::from)?;
+        Ok(PyDataFrame::new(df))
+    }
 }
 
 impl PySessionContext {

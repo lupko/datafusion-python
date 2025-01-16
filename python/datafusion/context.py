@@ -1108,3 +1108,7 @@ class SessionContext:
     def execute(self, plan: ExecutionPlan, partitions: int) -> RecordBatchStream:
         """Execute the ``plan`` and return the results."""
         return RecordBatchStream(self.ctx.execute(plan._raw_plan, partitions))
+
+    def execute_logical_plan(self, logical_plan: LogicalPlan) -> DataFrame:
+        """Execute the ``logical_plan`` and return the :py:class:`DataFrame`."""
+        return DataFrame(self.ctx.execute_logical_plan(logical_plan._raw_plan))
